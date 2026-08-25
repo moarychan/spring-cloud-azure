@@ -112,7 +112,7 @@ public final class Main {
 						if (!pattern.matcher(name).matches()) {
 							return;
 						}
-						String description = String.valueOf(propertyItem.get("description"));
+						String description = formatDescription(String.valueOf(propertyItem.get("description")));
 						String defaultValue = String.valueOf(propertyItem.get("defaultValue"));
 						descriptions.put(name, defaultValue == null || defaultValue.equals("null") ? description
 								: description + " The default value is " + "`" + defaultValue + "`" + ".");
@@ -152,6 +152,73 @@ public final class Main {
 				}
 				return false;
 			}).collect(Collectors.toList());
+		}
+
+		private String formatDescription(String description) {
+			return formatURL(replaceQuotes(description)).replace("GrantedAuthority's", "`GrantedAuthority`'s")
+					.replace("access_token's", "`access_token`'s");
+		}
+
+		private String formatURL(String description) {
+			String regex1 = "(\\b\\w+\\b)\\s?:\\s*https?://learn.microsoft.com([^\\s]+)";
+			String regex2 = "(@see <a href=\")https?://learn.microsoft.com([^\\s]+)";
+			return description.replaceAll(regex1, "[$1]($2).").replaceAll(regex2, "$1$2");
+		}
+
+		/**
+		 * Replace single/double quotes with backticks, ignoring possessive and nested
+		 * cases.
+		 */
+		private String replaceQuotes(String description) {
+			StringBuilder result = new StringBuilder();
+			int n = description.length();
+			boolean insideSingleQuote = false;
+			boolean insideDoubleQuote = false;
+			boolean insideBacktick = false;
+			boolean insideSeeTag = false;
+
+			for (int i = 0; i < n; i++) {
+				char currentChar = description.charAt(i);
+				if (!insideSeeTag && i >= 5 && description.startsWith("@see <", i - 5)) {
+					insideSeeTag = true;
+				}
+				if (insideSeeTag) {
+					result.append(currentChar);
+					if (currentChar == '>') {
+						insideSeeTag = false;
+					}
+					continue;
+				}
+				if (currentChar == '`') {
+					insideBacktick = !insideBacktick;
+					result.append(currentChar);
+					continue;
+				}
+				if (!insideBacktick) {
+					// skip 's, n't
+					if (i + 1 < n && currentChar == '\''
+							&& (description.charAt(i + 1) == 's' || description.charAt(i + 1) == 't') && i > 0
+							&& (Character.isLetter(description.charAt(i - 1)) || description.charAt(i - 1) == 'n')) {
+						result.append(currentChar);
+						continue;
+					}
+					if (currentChar == '\'' && !insideDoubleQuote) {
+						result.append('`');
+						insideSingleQuote = !insideSingleQuote;
+					}
+					else if (currentChar == '"' && !insideSingleQuote) {
+						result.append('`');
+						insideDoubleQuote = !insideDoubleQuote;
+					}
+					else {
+						result.append(currentChar);
+					}
+				}
+				else {
+					result.append(currentChar);
+				}
+			}
+			return result.toString();
 		}
 
 		/**
@@ -215,6 +282,40 @@ public final class Main {
 		}
 
 		/**
+		 * To reduce variance, use the same description width as the current document.
+		 */
+		private int getDescriptionColumnWidth(String outputFile, Stream<String> stringStream) {
+			Map<String, Integer> DES_WIDTH = new HashMap<>();
+			DES_WIDTH.put("configuration-properties-azure-active-directory.md", 641);
+			DES_WIDTH.put("configuration-properties-azure-active-directory-b2c.md", 470);
+			DES_WIDTH.put("configuration-properties-azure-service-bus.md", 194);
+			DES_WIDTH.put("configuration-properties-azure-service-bus-jms.md", 446);
+			return DES_WIDTH.getOrDefault(outputFile.substring(outputFile.lastIndexOf("/") + 1),
+					getMaxLength(stringStream));
+		}
+
+		private String getServiceName(String outputFile) {
+			HashMap<String, String> DES_WIDTH = new HashMap<>();
+			DES_WIDTH.put("configuration-properties-all.md", "Spring Cloud Azure");
+			DES_WIDTH.put("configuration-properties-azure-active-directory.md", "Microsoft Entra");
+			DES_WIDTH.put("configuration-properties-azure-active-directory-b2c.md", "Azure Active Directory B2C");
+			DES_WIDTH.put("configuration-properties-azure-app-configuration.md", "Azure App Configuration");
+			DES_WIDTH.put("configuration-properties-azure-cosmos-db.md", "Azure Cosmos DB");
+			DES_WIDTH.put("configuration-properties-azure-event-hubs.md", "Azure Event Hubs");
+			DES_WIDTH.put("configuration-properties-azure-key-vault.md", "Azure Key Vault");
+			DES_WIDTH.put("configuration-properties-azure-key-vault-certificates.md", "Azure Key Vault Certificates");
+			DES_WIDTH.put("configuration-properties-azure-key-vault-secrets.md", "Azure Key Vault Secrets");
+			DES_WIDTH.put("configuration-properties-azure-service-bus.md", "Azure Service Bus");
+			DES_WIDTH.put("configuration-properties-azure-service-bus-jms.md", "Azure Service Bus JMS");
+			DES_WIDTH.put("configuration-properties-azure-storage.md", "Azure Storage");
+			DES_WIDTH.put("configuration-properties-azure-storage-blob.md", "Azure Storage Blob");
+			DES_WIDTH.put("configuration-properties-azure-storage-file-share.md", "Azure Storage File Share");
+			DES_WIDTH.put("configuration-properties-azure-storage-queue.md", "Azure Storage Queue");
+			DES_WIDTH.put("configuration-properties-global.md", "Spring Cloud Azure Global");
+			return DES_WIDTH.getOrDefault(outputFile.substring(outputFile.lastIndexOf("/") + 1), null);
+		}
+
+		/**
 		 * Generate properties markdown files.
 		 * @param outputFile the output file
 		 * @param descriptions the result set of properties and their descriptions
@@ -222,21 +323,31 @@ public final class Main {
 		 */
 		private void generatePropertiesFile(String outputFile, TreeMap<String, String> descriptions, String date) {
 			int nameColumnWidth = getMaxLength(descriptions.keySet().stream());
-			int descriptionColumnWidth = getMaxLength(descriptions.values().stream());
+			int descriptionColumnWidth = getDescriptionColumnWidth(outputFile, descriptions.values().stream());
 			Path path = Paths.get(outputFile);
+			String serviceName = getServiceName(outputFile);
 			try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
 				writer.write("---");
 				writer.newLine();
+				writer.write(String.format("title: %s configuration properties", serviceName));
+				writer.newLine();
+				writer.write(String.format("description: This reference doc contains all %s configuration properties.",
+						serviceName));
+				writer.newLine();
 				writer.write("author: KarlErickson");
 				writer.newLine();
-				writer.write("ms.author: v-yonghuiye");
+				writer.write("ms.author: hangwan");
 				writer.newLine();
 				writer.write("ms.date: " + date);
+				writer.newLine();
+				writer.write("ms.topic: reference");
+				writer.newLine();
+				writer.write("ms.custom: devx-track-java, spring-cloud-azure, devx-track-extended-java");
 				writer.newLine();
 				writer.write("---");
 				writer.newLine();
 				writer.newLine();
-				writer.write("## " + generateTitleName(outputFile) + " properties");
+				writer.write(String.format("# %s configuration properties", serviceName));
 				writer.newLine();
 				writer.newLine();
 				writer.write("> [!div class=\"mx-tdBreakAll\"]");

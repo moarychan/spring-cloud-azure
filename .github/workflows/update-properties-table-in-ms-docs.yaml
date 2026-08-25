@@ -12,26 +12,33 @@ jobs:
   update_properties_table_in_ms_docs_job:
     runs-on: ubuntu-latest
     steps:
-      - uses: snow-actions/sparse-checkout@v1.1.0
+      - uses: actions/checkout@v3
         name: Checkout Azure/azure-sdk-for-java
         with:
-          patterns: |
-            sdk/spring eng sdk/keyvault sdk/boms sdk/aot
-          repository: Azure/azure-sdk-for-java
+          repository: 'Azure/azure-sdk-for-java'
+          path: 'azure-sdk-for-java'
           ref: main
-          path: azure-sdk-for-java
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4.2.2
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
       - name: Build latest azure-sdk-for-java repository
         run: |
           cd azure-sdk-for-java
-          mvn clean install -Dmaven.javadoc.skip=true -DskipTests \
+          mvn clean install \
             -Dcheckstyle.skip=true \
-            -ntp \
+            -Dcodesnippet.skip \
+            -Denforcer.skip \
+            -Djacoco.skip=true \
+            -Dmaven.javadoc.skip=true \
+            -Drevapi.skip=true \
+            -DskipTests \
             -Dspotbugs.skip=true \
-            -Drevapi.skip=true -Djacoco.skip=true \
-            -Dparallel-test-playback \
-            -Pdev \
-            -f sdk/spring/pom.xml
+            -T 4 -ntp -Pdev -f sdk/spring/pom.xml
 
       - uses: actions/checkout@v3
         name: Checkout microsoft/spring-cloud-azure
@@ -45,8 +52,8 @@ jobs:
         id: get_project_version_and_branch_name
         run: |
           project_version=$(mvn -q -Dexec.executable="echo" -Dexec.args='${project.version}' --non-recursive exec:exec)
-          echo ::set-output name=branch_name::spring-cloud-azure_${project_version%-*}
-          echo ::set-output name=project_version::${project_version%-*}
+          echo branch_name=spring-cloud-azure_${project_version%-*} >> $GITHUB_OUTPUT
+          echo project_version=${project_version%-*} >> $GITHUB_OUTPUT
 
       - uses: actions/checkout@v3
         name: Checkout MicrosoftDocs/azure-dev-docs-pr
@@ -65,7 +72,7 @@ jobs:
           git config --global user.name github-actions
           git remote add ${{ secrets.UPDATE_PROPERTIES_TABLE_IN_MS_DOCS_GITHUB_USERNAME }} https://github.com/${{ secrets.UPDATE_PROPERTIES_TABLE_IN_MS_DOCS_GITHUB_USERNAME }}/azure-dev-docs-pr.git
           git fetch ${{ secrets.UPDATE_PROPERTIES_TABLE_IN_MS_DOCS_GITHUB_USERNAME }}
-          echo ::set-output name=topic_branch_exists::$(git ls-remote --heads ${{ secrets.UPDATE_PROPERTIES_TABLE_IN_MS_DOCS_GITHUB_USERNAME }} ${{ steps.get_project_version_and_branch_name.outputs.branch_name }} | wc -l)
+          echo topic_branch_exists=$(git ls-remote --heads ${{ secrets.UPDATE_PROPERTIES_TABLE_IN_MS_DOCS_GITHUB_USERNAME }} ${{ steps.get_project_version_and_branch_name.outputs.branch_name }} | wc -l) >> $GITHUB_OUTPUT
 
       - name: Commit files changes to topic branch
         id: commit_files_changes_to_topic_branch
@@ -80,7 +87,7 @@ jobs:
           fi
           cp -f ../spring-cloud-azure-markdown-appdendix-generator/src/main/asciidoc/configuration-*.md articles/java/spring-framework/includes/spring-cloud-azure
           if [[ -n "$(git status -s)" ]] ;then
-            echo '::set-output name=added_a_commit_in_topic_branch::true'
+          echo "added_a_commit_in_topic_branch=true" >> $GITHUB_OUTPUT
             git add ./articles/java/spring-framework/includes/spring-cloud-azure/configuration-*.md
             git commit -m "Update the configuration properties for Spring Cloud Azure: ${{ steps.get_project_version_and_branch_name.outputs.project_version }}. This commit is created by GitHub Action: https://github.com/${{github.repository}}/actions/runs/${{github.run_id}}"
             git push "https://${{ secrets.UPDATE_PROPERTIES_TABLE_IN_MS_DOCS_GITHUB_USERNAME }}:${{ secrets.UPDATE_PROPERTIES_TABLE_IN_MS_DOCS_GITHUB_ACCESS_TOKEN }}@github.com/${{ secrets.UPDATE_PROPERTIES_TABLE_IN_MS_DOCS_GITHUB_USERNAME }}/azure-dev-docs-pr.git"
